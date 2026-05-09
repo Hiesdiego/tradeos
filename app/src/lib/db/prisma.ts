@@ -19,6 +19,20 @@ function readIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parsePoolerMode(url: string): "supabase-session" | "other" {
+  try {
+    const parsed = new URL(url);
+    const isSupabasePooler = parsed.hostname.includes(".pooler.supabase.com");
+    const port = parsed.port || "5432";
+    if (isSupabasePooler && port === "5432") {
+      return "supabase-session";
+    }
+  } catch {
+    // noop: keep default mode
+  }
+  return "other";
+}
+
 /**
  * FIX: P1017 "Server has closed the connection"
  *
@@ -41,10 +55,28 @@ function createPrismaClient() {
   const isVercelProd =
     process.env.VERCEL === "1" &&
     process.env.VERCEL_ENV === "production";
-  const defaultPoolMax = isVercelProd ? 2 : 10;
-  const poolMax = readIntEnv("PG_POOL_MAX", defaultPoolMax);
+  const poolerMode = parsePoolerMode(connectionString!);
+  const isSupabaseSessionMode = poolerMode === "supabase-session";
+  const defaultPoolMax = isVercelProd
+    ? isSupabaseSessionMode
+      ? 1
+      : 2
+    : 10;
+  const requestedPoolMax = readIntEnv("PG_POOL_MAX", defaultPoolMax);
+  const poolMax =
+    isVercelProd && isSupabaseSessionMode
+      ? Math.min(requestedPoolMax, 1)
+      : requestedPoolMax;
   const idleTimeoutMillis = readIntEnv("PG_IDLE_TIMEOUT_MS", 20_000);
   const connectionTimeoutMillis = readIntEnv("PG_CONNECT_TIMEOUT_MS", 8_000);
+
+  if (isVercelProd && isSupabaseSessionMode) {
+    console.warn(
+      "[prisma] Using Supabase session-mode pooler (:5432) on Vercel production. " +
+        "Clamping PG pool max to 1 to reduce EMAXCONNSESSION errors. " +
+        "Recommended fix: switch DATABASE_URL to Supabase transaction mode (:6543)."
+    );
+  }
 
   const pool = new Pool({
     connectionString,
