@@ -7,7 +7,7 @@ type Context = { params: { tradeId: string; milestoneNumber: string } };
 
 const IMAGE_MIME_PREFIX = "image/";
 const LOGO_HINTS = ["logo", "brandmark", "icon", "avatar", "watermark", "banner"];
-const AI_CHECKS_PER_DAY_LIMIT = 2;
+const AI_CHECKS_PER_DAY_LIMIT = 3;
 
 function extractFirstJsonObject(input: string): string | null {
   const start = input.indexOf("{");
@@ -102,7 +102,7 @@ export const POST = withAuth(async (req: AuthedRequest, ctx: Context) => {
   if (checksToday >= AI_CHECKS_PER_DAY_LIMIT) {
     return NextResponse.json(
       {
-        error: "Daily Tradeos Agent Check limit reached (2/day).",
+        error: "Daily Tradeos Agent Check limit reached (3/day).",
         limit: AI_CHECKS_PER_DAY_LIMIT,
         checks_today: checksToday,
         resets_at: nextDayStartUtc.toISOString(),
