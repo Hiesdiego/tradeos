@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "programs/tradeos"
+]
+
+[profile.release]
+overflow-checks = true

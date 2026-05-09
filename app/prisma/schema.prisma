@@ -1,0 +1,354 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TradeStatus {
+  pending_supplier
+  pending_funding
+  funded
+  in_progress
+  milestone_1_released
+  milestone_2_released
+  completed
+  disputed
+  cancelled
+  refunded
+}
+
+enum MilestoneStatus {
+  pending
+  proof_uploaded
+  released
+  disputed
+}
+
+enum DisputeStatus {
+  open
+  under_review
+  escalated
+  pending_admin_review
+  resolved_buyer
+  resolved_supplier
+  resolved_split
+  resolved_overridden_buyer
+  resolved_overridden_supplier
+  resolved_overridden_split
+}
+
+enum UserRole {
+  buyer
+  supplier
+  both
+}
+
+enum LedgerEventType {
+  escrow_funded
+  proof_uploaded
+  proof_rejected
+  milestone_released
+  dispute_opened
+  dispute_escalated
+  dispute_vote_cast
+  dispute_resolved
+  dispute_admin_override
+  dispute_auto_enforced
+  arbitration_fee_charged
+  arbiter_fee_allocated
+  escrow_refunded
+}
+
+model User {
+  id                String   @id @default(uuid())
+  wallet_address    String   @unique
+  display_name      String?
+  email             String?
+  telegram_chat_id  String?
+  telegram_username String?
+  role              UserRole?
+  country           String?
+  business_name     String?
+  reputation_score  Decimal  @default(5.0)
+  total_trades      Int      @default(0)
+  completed_trades  Int      @default(0)
+  disputed_trades   Int      @default(0)
+  created_at        DateTime @default(now())
+
+  trades_as_buyer    Trade[]            @relation("BuyerTrades")
+  trades_as_supplier Trade[]            @relation("SupplierTrades")
+  messages           TradeMessage[]
+  disputes_raised    Dispute[]
+  reputation_events  ReputationEvent[]
+  arbiter_profile    ArbiterProfile?
+  uploaded_proofs    MilestoneProof[]
+  ai_checks          MilestoneAiCheck[]
+
+  @@map("users")
+}
+
+model Trade {
+  id                 String      @id @default(uuid())
+  trade_number       String      @unique
+  buyer_id           String
+  supplier_id        String?
+  supplier_invite_token String?  @unique
+  goods_description  String
+  goods_category     String?
+  quantity           String?
+  total_amount_usdc  Decimal
+  arbitration_fee_reserve_usdc Decimal @default(0.0)
+  arbitration_fee_rate_bps Int @default(0)
+  escrow_pubkey      String?
+  status             TradeStatus @default(pending_supplier)
+  corridor           String      @default("NG-UAE")
+  pickup_location    String?
+  dropoff_location   String?
+  buyer_contact_name String?
+  buyer_contact_phone String?
+  supplier_contact_name String?
+  supplier_contact_phone String?
+  expected_ship_date DateTime?
+  expected_delivery_date DateTime?
+  shipping_reference String?
+  incoterm           String?
+  notes              String?
+  created_at         DateTime    @default(now())
+  updated_at         DateTime    @updatedAt
+
+  buyer     User  @relation("BuyerTrades", fields: [buyer_id], references: [id])
+  supplier  User? @relation("SupplierTrades", fields: [supplier_id], references: [id])
+
+  milestones        Milestone[]
+  messages          TradeMessage[]
+  disputes          Dispute[]
+  reputation_events ReputationEvent[]
+  receipt           TradeReceipt?
+  ledger_entries    LedgerEntry[]
+  telegram_subscriptions TelegramTradeSubscription[]
+
+  @@map("trades")
+}
+
+model TelegramTradeSubscription {
+  id         String   @id @default(uuid())
+  trade_id   String
+  chat_id    String
+  created_at DateTime @default(now())
+
+  trade Trade @relation(fields: [trade_id], references: [id], onDelete: Cascade)
+
+  @@unique([trade_id, chat_id])
+  @@index([chat_id])
+  @@map("telegram_trade_subscriptions")
+}
+
+model Milestone {
+  id                  String          @id @default(uuid())
+  trade_id            String
+  milestone_number    Int
+  description         String
+  release_percentage  Int
+  release_amount_usdc Decimal?
+  status              MilestoneStatus @default(pending)
+  proof_url           String?
+  proof_hash_sha256   String?
+  proof_anchor_tx     String?
+  proof_rejection_reason String?
+  proof_rejected_at   DateTime?
+  proof_version       Int             @default(0)
+  proof_uploaded_at   DateTime?
+  released_at         DateTime?
+  tx_signature        String?
+
+  trade    Trade     @relation(fields: [trade_id], references: [id])
+  disputes Dispute[]
+  proofs   MilestoneProof[]
+  ai_checks MilestoneAiCheck[]
+
+  @@unique([trade_id, milestone_number])
+  @@map("milestones")
+}
+
+model MilestoneProof {
+  id                String   @id @default(uuid())
+  milestone_id      String
+  uploader_user_id  String
+  file_url          String
+  file_mime         String?
+  file_hash_sha256  String
+  file_anchor_tx    String?
+  created_at        DateTime @default(now())
+
+  milestone Milestone @relation(fields: [milestone_id], references: [id], onDelete: Cascade)
+  uploader  User      @relation(fields: [uploader_user_id], references: [id], onDelete: Cascade)
+
+  @@index([milestone_id, created_at])
+  @@map("milestone_proofs")
+}
+
+model MilestoneAiCheck {
+  id               String   @id @default(uuid())
+  milestone_id     String
+  checker_user_id  String
+  model            String
+  status           String   @default("completed")
+  verdict          String?
+  confidence       Decimal?
+  summary          String
+  findings_json    Json?
+  raw_response     Json?
+  created_at       DateTime @default(now())
+
+  milestone Milestone @relation(fields: [milestone_id], references: [id], onDelete: Cascade)
+  checker   User      @relation(fields: [checker_user_id], references: [id], onDelete: Cascade)
+
+  @@index([checker_user_id, created_at])
+  @@index([milestone_id, created_at])
+  @@map("milestone_ai_checks")
+}
+
+model Dispute {
+  id            String        @id @default(uuid())
+  trade_id      String
+  milestone_id  String?
+  raised_by     String
+  reason        String
+  status        DisputeStatus @default(open)
+  arbiter_notes String?
+  arbitration_fee_usdc Decimal @default(0.0)
+  arbitration_fee_rate_bps Int @default(0)
+  arbitration_fee_source String? @default("reserve")
+  panel_size     Int          @default(1)
+  escalation_level Int        @default(1)
+  accepted_at    DateTime?
+  panel_signup_deadline DateTime?
+  panel_locked_at DateTime?
+  evidence_deadline DateTime?
+  decision_deadline DateTime?
+  admin_override_deadline DateTime?
+  final_resolution String?
+  panel_resolution String?
+  finalized_by_user_id String?
+  admin_override_by_user_id String?
+  admin_override_reason String?
+  requires_admin_review Boolean @default(true)
+  auto_enforce_after_deadline Boolean @default(true)
+  escalated_at   DateTime?
+  resolved_at   DateTime?
+  created_at    DateTime      @default(now())
+
+  trade     Trade      @relation(fields: [trade_id], references: [id])
+  milestone Milestone? @relation(fields: [milestone_id], references: [id])
+  raiser    User       @relation(fields: [raised_by], references: [id])
+  assignments DisputeArbiterAssignment[]
+
+  @@index([status, created_at])
+  @@map("disputes")
+}
+
+model ArbiterProfile {
+  id                  String   @id @default(uuid())
+  user_id             String   @unique
+  stake_usdc          Decimal  @default(0.0)
+  reputation_score    Decimal  @default(5.0)
+  active              Boolean  @default(true)
+  min_case_amount_usdc Decimal @default(0.0)
+  max_case_amount_usdc Decimal?
+  accepted_cases      Int      @default(0)
+  resolved_cases      Int      @default(0)
+  sla_breaches        Int      @default(0)
+  total_earnings_usdc Decimal  @default(0.0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id])
+  assignments DisputeArbiterAssignment[]
+
+  @@index([active, reputation_score])
+  @@map("arbiter_profiles")
+}
+
+model DisputeArbiterAssignment {
+  id                 String   @id @default(uuid())
+  dispute_id         String
+  arbiter_profile_id String
+  assigned_at        DateTime @default(now())
+  accepted_at        DateTime?
+  voted_at           DateTime?
+  vote               String?
+  vote_reason        String?
+  fee_share_usdc     Decimal  @default(0.0)
+  paid_out           Boolean  @default(false)
+
+  dispute Dispute @relation(fields: [dispute_id], references: [id], onDelete: Cascade)
+  arbiter ArbiterProfile @relation(fields: [arbiter_profile_id], references: [id], onDelete: Cascade)
+
+  @@unique([dispute_id, arbiter_profile_id])
+  @@index([dispute_id, voted_at])
+  @@map("dispute_arbiter_assignments")
+}
+
+model ReputationEvent {
+  id         String   @id @default(uuid())
+  user_id    String
+  trade_id   String
+  event_type String
+  score_delta Decimal
+  created_at DateTime @default(now())
+
+  user  User  @relation(fields: [user_id], references: [id])
+  trade Trade @relation(fields: [trade_id], references: [id])
+
+  @@map("reputation_events")
+}
+
+model TradeReceipt {
+  id           String   @id @default(uuid())
+  trade_id     String   @unique
+  receipt_hash String?
+  previous_receipt_hash String?
+  receipt_payload Json?
+  compliance_version String? @default("v1")
+  tx_signature String?
+  issued_at    DateTime @default(now())
+
+  trade Trade @relation(fields: [trade_id], references: [id])
+
+  @@map("trade_receipts")
+}
+
+model LedgerEntry {
+  id               String          @id @default(uuid())
+  trade_id         String
+  actor_user_id    String?
+  event_type       LedgerEventType
+  amount_usdc      Decimal?
+  currency         String          @default("USDC")
+  reference_tx     String?
+  metadata         Json?
+  entry_hash       String
+  previous_hash    String?
+  created_at       DateTime        @default(now())
+
+  trade Trade @relation(fields: [trade_id], references: [id], onDelete: Cascade)
+
+  @@index([trade_id, created_at])
+  @@map("ledger_entries")
+}
+
+model TradeMessage {
+  id         String   @id @default(uuid())
+  trade_id   String
+  sender_id  String
+  content    String
+  created_at DateTime @default(now())
+
+  trade  Trade @relation(fields: [trade_id], references: [id], onDelete: Cascade)
+  sender User  @relation(fields: [sender_id], references: [id])
+
+  @@index([trade_id])
+  @@map("trade_messages")
+}
